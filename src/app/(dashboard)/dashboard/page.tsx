@@ -34,6 +34,19 @@ export default async function DashboardPage({ searchParams }: Props) {
 
   return (
     <div className="flex flex-col flex-1 min-w-0">
+      {/* Header com Range Selector — Racionalizado MD3 */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4 px-1">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-headline-sm font-bold text-on-surface">Visão Operacional</h1>
+          <p className="text-body-sm text-on-surface-variant flex items-center gap-2">
+            <span className="material-symbols-outlined text-[16px]">calendar_today</span>
+            Análise de performance: {data.rangeLabel}
+          </p>
+        </div>
+        <div className="bg-surface-container-low p-1 rounded-xl shadow-sm border border-outline-variant/10">
+          <RangeSelector currentRange={range} from={from} to={to} />
+        </div>
+      </div>
 
       {/* Diagnostic Banner — Visible if config is missing */}
       {(!data.diagnostics?.supabase || !data.diagnostics?.amazon || !data.diagnostics?.marketplace) && (
