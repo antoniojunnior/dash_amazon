@@ -9,8 +9,18 @@ import { createClient } from '@supabase/supabase-js';
 
 // Usamos service_role para writes server-side (ignora RLS)
 function getServiceClient() {
-  const url  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Supabase] Credenciais ausentes. O repositório operará em modo degradado.');
+    }
+    // Retorna um cliente "dummy" ou lança erro capturável
+    // Para simplificar, falhamos com erro descritivo em vez de crash silencioso
+    throw new Error('Supabase client not configured. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  }
+
   return createClient(url, key);
 }
 

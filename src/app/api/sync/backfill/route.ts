@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID!;
+  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
+  if (!marketplaceId) {
+    return NextResponse.json({ error: 'AMAZON_MARKETPLACE_ID não configurado.' }, { status: 500 });
+  }
   const daysParam     = request.nextUrl.searchParams.get('days');
   const forceParam    = request.nextUrl.searchParams.get('force') === 'true';
   const daysAgo       = Math.min(parseInt(daysParam ?? '60', 10), 180); // máx 180 dias

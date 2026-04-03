@@ -35,9 +35,11 @@ export async function fetchLivePrices(asins: string[]): Promise<Map<string, { pr
   const amz = getAmazonClient();
   if (!amz) return liveResults;
 
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID!;
+  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
   if (!marketplaceId) {
-    console.error('[Pricing] Marketplace ID não configurado');
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Pricing] Marketplace ID não configurado. Pulando fetch de preços live.');
+    }
     return liveResults;
   }
   
@@ -286,7 +288,11 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
 }
 
 export async function getInventory(): Promise<InventoryRow[]> {
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID!;
+  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
+  if (!marketplaceId) {
+    console.warn('[Inventory] AMAZON_MARKETPLACE_ID não configurado. Retornando lista vazia.');
+    return [];
+  }
   const amz = getAmazonClient();
   
   let summaries: any[] = [];
@@ -512,7 +518,10 @@ export async function getAlerts() {
 
 export async function getOrders(daysAgo: number): Promise<Order[]> {
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-  if (!marketplaceId) return [];
+  if (!marketplaceId) {
+    console.warn('[Orders] Marketplace ID ausente em getOrders');
+    return [];
+  }
 
   // Gatilho para buscar novos pedidos (cooldown 5m)
   checkAndTriggerNewOrdersSync(marketplaceId);

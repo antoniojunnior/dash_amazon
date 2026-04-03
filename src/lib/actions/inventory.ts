@@ -8,7 +8,8 @@ import { upsertProductMeta } from '../supabase/orders-repository';
  * para o cliente.
  */
 export async function saveProductMetaAction(asin: string, data: { unit_cost?: number, lead_time_days?: number }) {
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID!;
+  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
+  if (!marketplaceId) throw new Error('AMAZON_MARKETPLACE_ID is not configured.');
   
   if (!asin) throw new Error('ASIN é obrigatório');
   
