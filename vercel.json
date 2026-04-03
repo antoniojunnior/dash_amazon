@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a9d798c1dc8802e53d0f026ca1a7ce9992cc724e08e7b935780e257f180a055b
-size 286
+{
+  "version": 2,
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "regions": ["cdg1"],
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "crons": [
+    {
+      "path": "/api/cron/sync-orders",
+      "schedule": "0 8,20 * * *"
+    }
+  ]
+}
