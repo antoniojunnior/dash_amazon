@@ -48,29 +48,33 @@ export interface OrderRow {
 
 /**
  * Mapeia um pedido processado para o schema real da tabela amazon_orders.
- * CORREÇÃO: Usa .length > 0 para evitar que [] sobrescreva dados válidos.
+ * CORREÇÃO: Evita aninhamento recursivo de raw_payload ao espalhar apenas o objeto de dados puro.
  */
 export function toOrderRow(o: any, marketplaceId: string): any {
   const idValue = o.id || o.amazon_order_id || o.AmazonOrderId;
-  const itemsSource = (o.items?.length ? o.items : 
-                      (o.raw_payload?.items?.length ? o.raw_payload.items : 
-                      (o.raw_payload?.OrderItems?.length ? o.raw_payload.OrderItems : 
-                      (o.OrderItems?.length ? o.OrderItems : []))));
+  
+  // Limpeza de Payload: Se 'o' for uma linha do banco, pegamos o payload real de dentro
+  const nestedPayload = o.raw_payload;
+  const source = (nestedPayload && typeof nestedPayload === 'object' && !Array.isArray(nestedPayload)) ? nestedPayload : o;
+
+  // Busca de Itens (multi-nível para resiliência)
+  const itemsSource = (source.items?.length ? source.items : 
+                      (source.raw_payload?.items?.length ? source.raw_payload.items : 
+                      (source.raw_payload?.OrderItems?.length ? source.raw_payload.OrderItems : 
+                      (source.OrderItems?.length ? source.OrderItems : []))));
 
   return {
     id:                  idValue,
     amazon_order_id:     idValue,
     marketplace_id:      marketplaceId,
-    created_at:          o.created_at || o.PurchaseDate,
-    status:              o.status || o.OrderStatus,
-    fulfillment_channel: o.fulfillment_channel || (o.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM') || 'FBA',
-    total:               o.total || (o.OrderTotal?.Amount ? parseFloat(o.OrderTotal.Amount) : 0),
-    currency:            o.currency || o.OrderTotal?.CurrencyCode || 'BRL',
+    created_at:          o.created_at || o.PurchaseDate || source.created_at,
+    status:              o.status || o.OrderStatus || source.status,
+    fulfillment_channel: o.fulfillment_channel || (o.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM') || source.fulfillment_channel || 'FBA',
+    total:               o.total || (o.OrderTotal?.Amount ? parseFloat(o.OrderTotal.Amount) : 0) || source.total || 0,
+    currency:            o.currency || o.OrderTotal?.CurrencyCode || source.currency || 'BRL',
     num_items_shipped:   o.num_items_shipped ?? o.NumberOfItemsShipped ?? (itemsSource[0]?.quantity || 0),
     num_items_unshipped: o.num_items_unshipped ?? o.NumberOfItemsUnshipped ?? 0,
-    raw_payload: (o.raw_payload && typeof o.raw_payload === 'object') 
-      ? { ...o.raw_payload, items: itemsSource }
-      : { ...o, items: itemsSource },
+    raw_payload: { ...source, items: itemsSource }, // Salva apenas o objeto de dados limpo
     updated_at: new Date().toISOString()
   };
 }

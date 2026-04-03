@@ -60,21 +60,40 @@ export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRo
   }, 0);
 }
 
+/**
+ * EXTRAÇÃO DE ITENS (V4.1 - DEEP SEARCH)
+ * Agora busca itens recursivamente para lidar com o aninhamento de metadados.
+ */
 export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow[] = []): OrderItem[] {
   let rawList: any = null;
-  const keys = Object.keys(raw || {});
-  const findK = (t: string) => keys.find(k => k.toLowerCase() === t.toLowerCase());
-  const kItems = findK('items');
-  const kOrderItems = findK('OrderItems');
-
-  if (kItems && Array.isArray(raw[kItems]) && raw[kItems].length > 0) rawList = raw[kItems];
-  else if (kOrderItems) {
-    const nested = raw[kOrderItems]?.OrderItem || raw[kOrderItems];
-    if (Array.isArray(nested) && nested.length > 0) rawList = nested;
-    else if (nested && typeof nested === 'object' && !Array.isArray(nested)) rawList = [nested];
-  }
   
+  // Função auxiliar para procurar 'items' ou 'OrderItems' em qualquer nível
+  const findItems = (data: any): any[] | null => {
+    if (!data || typeof data !== 'object') return null;
+    
+    const keys = Object.keys(data);
+    const kItems = keys.find(k => k.toLowerCase() === 'items');
+    if (kItems && Array.isArray(data[kItems]) && data[kItems].length > 0) return data[kItems];
+    
+    const kOrderItems = keys.find(k => k.toLowerCase() === 'orderitems');
+    if (kOrderItems) {
+      const nested = data[kOrderItems]?.OrderItem || data[kOrderItems];
+      if (Array.isArray(nested) && nested.length > 0) return nested;
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) return [nested];
+    }
+    
+    // Se não achou e tem um raw_payload aninhado, busca lá dentro (Recursão)
+    if (data.raw_payload && typeof data.raw_payload === 'object') return findItems(data.raw_payload);
+    if (data.payload && typeof data.payload === 'object') return findItems(data.payload);
+    
+    return null;
+  };
+
+  rawList = findItems(raw);
+  
+  // Fallback para o nível da linha do DB (o.items)
   if (!rawList && o.items && Array.isArray(o.items) && o.items.length > 0) rawList = o.items;
+
   let items = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
 
   if (items.length === 0) {
@@ -88,15 +107,21 @@ export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow
     const asin = i.asin || i.ASIN || '...';
     const sku = i.sku || i.SellerSKU || '...';
     const meta = inventory.find(inv => inv.asin === asin || inv.sku === sku);
-    let title = i.title || i.Title || '';
+    
+    // Prioridade total para o título real se disponível
+    let title = i.title || i.Title || i.productName || '';
     if (!title || title.includes('Pedido ') || title.includes('Sincronizando')) {
        title = meta?.title || title || `Item: ${asin}`;
     }
-    return { sku, asin, title, quantity: i.quantity || i.QuantityOrdered || 0, price: parseFloat(i.price || i.ItemPrice?.Amount || '0') };
+    
+    return { 
+      sku, asin, title, 
+      quantity: i.quantity || i.QuantityOrdered || 0, 
+      price: parseFloat(i.price || i.ItemPrice?.Amount || '0') 
+    };
   });
 }
 
-// CORREÇÃO BUILD: Garantir conformidade total com DashboardSummary interface
 export async function getDashboardSummary(range: string = '30d', from?: string, to?: string): Promise<DashboardSummary> {
   const mId = process.env.AMAZON_MARKETPLACE_ID;
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -129,9 +154,7 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       chartData: [], rangeLabel: range,
       diagnostics: { supabase: true, amazon: true, marketplace: true }
     } as DashboardSummary;
-  } catch (e) { 
-    return { vendas_hoje: 0, vendas_hoje_var: 0, pedidos_hoje: 0, pedidos_hoje_var: 0, ticket_medio: 0, ticket_medio_var: 0, estoque_valorizado: 0, skus_ativos: 0, acos_medio: 0, acos_medio_var: 0, buybox_win: 0, diagnostics: { supabase: false, amazon: false, marketplace: false } } as DashboardSummary; 
-  }
+  } catch (e) { return { vendas_hoje: 0, vendas_hoje_var: 0, pedidos_hoje: 0, pedidos_hoje_var: 0, ticket_medio: 0, ticket_medio_var: 0, estoque_valorizado: 0, skus_ativos: 0, acos_medio: 0, acos_medio_var: 0, buybox_win: 0, diagnostics: { supabase: false, amazon: false, marketplace: false } } as DashboardSummary; }
 }
 
 export async function getInventory(): Promise<InventoryRow[]> {
