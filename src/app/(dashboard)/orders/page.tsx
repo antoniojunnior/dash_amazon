@@ -282,8 +282,8 @@ export default async function OrdersPage({ searchParams }: Props) {
                                    <span className="material-symbols-outlined text-[20px]">inventory_2</span>
                                 </div>
                                 <div className="min-w-0">
-                                  <p className={`text-label-md font-black line-clamp-2 max-w-[420px] transition-colors leading-tight ${(item.title || item.Title) === 'Sincronizando produtos...' ? 'text-on-surface-variant/30 italic' : 'text-on-surface group-hover/item:text-primary'}`}>
-                                    {item.title || item.Title || `Item ${item.asin || item.ASIN || idx}`}
+                                  <p className={`text-label-md font-black line-clamp-2 max-w-[420px] transition-colors leading-tight ${((item.title || item.Title) === 'Sincronizando produtos...' || !(item.title || item.Title)) ? 'text-on-surface-variant/30 italic' : 'text-on-surface group-hover/item:text-primary'}`}>
+                                    {item.title || item.Title || (item.asin || item.ASIN ? `Item ${item.asin || item.ASIN}` : 'Processando Item...')}
                                   </p>
                                   <div className="flex items-center gap-3 mt-1.5">
                                     <span className="px-2 py-0.5 bg-primary-container text-on-primary-container text-[10px] font-black rounded-lg mono tracking-tighter">
