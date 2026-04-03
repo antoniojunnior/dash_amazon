@@ -108,7 +108,7 @@ export async function fetchLivePrices(asins: string[]): Promise<Map<string, { pr
  * Calcula o total do pedido com estratégia de fallback.
  * Prioriza o Preço Atual (Live) para pedidos pendentes.
  */
-function calculateOrderTotal(o: any, items: any[], inventory: InventoryRow[] = [], livePrices: Map<string, { price?: number; error?: string }> = new Map()): number {
+export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRow[] = [], livePrices: Map<string, { price?: number; error?: string }> = new Map()): number {
   if (o.total && o.total > 0) return o.total;
 
   const itemsTotal = items.reduce((sum, i) => sum + (i.price * i.quantity || 0), 0);
@@ -650,7 +650,7 @@ export async function getPricing() {
  * Busca os itens de cada pedido em lote para garantir nomes reais de produtos.
  * Implementa delay de 500ms entre chamadas para evitar rate limit (0.5 req/s).
  */
-async function fetchOrderItems(orderIds: string[]): Promise<Record<string, any[]>> {
+export async function fetchOrderItems(orderIds: string[]): Promise<Record<string, any[]>> {
   const amz = getAmazonClient();
   if (!amz || orderIds.length === 0) return {};
 
