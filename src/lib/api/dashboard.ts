@@ -210,7 +210,16 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       .filter(o => o.status !== 'canceled')
       .map(o => {
         const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-        const items = raw.items || [];
+        // Normalização Universal: Suporta camelCase e PascalCase (Amazon Nativa)
+        const rawItems = (raw.items || raw.OrderItems || []) as any[];
+        const items = rawItems.map(i => ({
+          title: i.title || i.Title || `Pedido ${o.id}`,
+          asin:  i.asin  || i.ASIN,
+          sku:   i.sku   || i.SellerSKU || '...',
+          quantity: i.quantity || i.QuantityOrdered || 1,
+          price: i.price || i.ItemPrice?.Amount || 0
+        }));
+        
         // Agora usa livePrices como prioridade na estimativa
         const total = calculateOrderTotal(o, items, inventory, livePrices);
       
@@ -353,18 +362,18 @@ export async function getInventory(): Promise<InventoryRow[]> {
     if (o.status === 'canceled') return;
     const date = o.created_at;
     const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-    const items = raw.items || [];
+    const items = raw.items || raw.OrderItems || [];
     const hasRealRevenue = o.total > 0;
     
     items.forEach((i: any) => {
-      const asin = i.asin || 'NONE'; 
+      const asin = i.asin || i.ASIN || 'NONE'; 
       const current = salesByAsin.get(asin) || { units: 0, total: 0, firstSale: date };
       const oldest = date < current.firstSale ? date : current.firstSale;
       const unitRevenue = hasRealRevenue
-        ? (i.price > 0 ? i.price * i.quantity : (o.total / (o.num_items_shipped || items.length)) * (i.quantity || 1))
+        ? ((i.price || i.ItemPrice?.Amount || 0) > 0 ? (i.price || i.ItemPrice?.Amount || 0) * (i.quantity || i.QuantityOrdered || 1) : (o.total / (o.num_items_shipped || items.length)) * (i.quantity || 1))
         : 0;
       salesByAsin.set(asin, {
-        units: current.units + (i.quantity || 0),
+        units: current.units + (i.quantity || i.QuantityOrdered || 0),
         total: current.total + unitRevenue,
         firstSale: oldest
       });
@@ -571,7 +580,7 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
     
     return ordersRaw.map((o: any): Order => {
       const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-      const items = raw.items || [];
+      const items = (raw.items || raw.OrderItems || []) as any[];
       
       return {
         id: o.id,
@@ -585,11 +594,11 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
           const liveResult = livePrices.get(i.asin);
           const livePrice = liveResult?.price;
           return {
-            sku: i.sku || '...',
-            asin: i.asin || '...',
-            title: i.title || `Produto ${i.sku}`,
-            quantity: i.quantity || 0,
-            price: i.price || livePrice || invItem?.avg_price || 0,
+            sku: i.sku || i.SellerSKU || '...',
+            asin: i.asin || i.ASIN || '...',
+            title: i.title || i.Title || `Produto ${i.sku || i.SellerSKU}`,
+            quantity: i.quantity || i.QuantityOrdered || 0,
+            price: i.price || i.ItemPrice?.Amount || livePrice || invItem?.avg_price || 0,
             image_url: i.image_url
           };
         })
@@ -669,14 +678,17 @@ export async function fetchOrderItems(orderIds: string[]): Promise<Record<string
         path: { orderId }
       });
 
-      const batch = response.payload?.OrderItems || response.OrderItems || [];
-      orderItemsMap[orderId] = batch.map((i: any) => ({
-        title:    i.Title || `Produto ${i.SellerSKU || i.ASIN}`,
-        sku:      i.SellerSKU || '...',
-        asin:     i.ASIN || '...',
-        quantity: i.QuantityOrdered || 0,
-        price:    i.ItemPrice?.Amount ? parseFloat(i.ItemPrice.Amount) / (i.QuantityOrdered || 1) : 0,
-      }));
+      const payload = response.payload || response;
+      const itemsList = payload.OrderItems || payload.items || [];
+      orderItemsMap[orderId] = itemsList.map((item: any) => {
+        return {
+          title: item.title || item.Title || `Item ${orderId}`,
+          asin:  item.asin  || item.ASIN,
+          sku:   item.sku   || item.SellerSKU || '...',
+          quantity: item.quantity || item.QuantityOrdered || 0,
+          price: item.price || item.ItemPrice?.Amount ? parseFloat(item.ItemPrice?.Amount || item.price) : 0
+        };
+      });
 
       // Respeita o rate limit da Amazon (0.5 req/s para getOrderItems)
       await new Promise(resolve => setTimeout(resolve, 500));
