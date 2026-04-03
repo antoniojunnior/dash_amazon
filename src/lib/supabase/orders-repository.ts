@@ -16,9 +16,22 @@ function getServiceClient() {
     if (process.env.NODE_ENV === 'development') {
       console.warn('[Supabase] Credenciais ausentes. O repositório operará em modo degradado.');
     }
-    // Retorna um cliente "dummy" ou lança erro capturável
-    // Para simplificar, falhamos com erro descritivo em vez de crash silencioso
-    throw new Error('Supabase client not configured. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+    // Retorna um cliente "dummy" seguro que não quebra as chamadas encadeadas
+    const dummyClient = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ 
+            order: () => ({ limit: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }),
+            gte: () => ({ lte: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+            maybeSingle: () => Promise.resolve({ data: null, error: null })
+          }),
+          in: () => Promise.resolve({ data: [], error: null })
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        upsert: () => Promise.resolve({ error: null })
+      })
+    };
+    return dummyClient as any;
   }
 
   return createClient(url, key);

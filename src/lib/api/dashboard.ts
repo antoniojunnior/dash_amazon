@@ -132,10 +132,13 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
   
   if (marketplaceId) {
-    // Gatilho para buscar novos pedidos (cooldown 5m)
-    checkAndTriggerNewOrdersSync(marketplaceId);
-    // Gatilho de sincronização bi-diária para atualizar status (cooldown 12h)
-    checkAndTriggerStatusSync(marketplaceId);
+    const amz = getAmazonClient();
+    if (amz) {
+      // Gatilho para buscar novos pedidos (cooldown 5m)
+      checkAndTriggerNewOrdersSync(marketplaceId);
+      // Gatilho de sincronização bi-diária para atualizar status (cooldown 12h)
+      checkAndTriggerStatusSync(marketplaceId);
+    }
   }
   
   // Normalização para início do dia atual (00:00)
@@ -523,10 +526,13 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
     return [];
   }
 
-  // Gatilho para buscar novos pedidos (cooldown 5m)
-  checkAndTriggerNewOrdersSync(marketplaceId);
-  // Gatilho de sincronização bi-diária para atualizar status (cooldown 12h)
-  checkAndTriggerStatusSync(marketplaceId);
+  const amz = getAmazonClient();
+  if (amz) {
+    // Gatilho para buscar novos pedidos (cooldown 5m)
+    checkAndTriggerNewOrdersSync(marketplaceId);
+    // Gatilho de sincronização bi-diária para atualizar status (cooldown 12h)
+    checkAndTriggerStatusSync(marketplaceId);
+  }
 
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
