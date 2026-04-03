@@ -132,6 +132,10 @@ export default async function OrdersPage({ searchParams }: Props) {
           <p className="text-body-sm text-on-surface-variant flex items-center gap-2">
             <span className="material-symbols-outlined text-[16px]">point_of_sale</span>
             Monitoramento de faturamento e logística: {totalItems} registros
+            <span className="ml-3 px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[9px] font-black rounded-full border border-emerald-100 flex items-center gap-1">
+              <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+              STATUS: V4-SYNC-ACTIVE
+            </span>
           </p>
         </div>
         <div className="flex items-center gap-3">
