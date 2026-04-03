@@ -9,7 +9,7 @@ let globalCache: {
   livePrices?: { data: Map<string, number>; timestamp: number };
 } = {};
 
-const LIVE_PRICES_CACHE_TTL = 2 * 60 * 1000; // 2 minutos para precisão nos testes
+const LIVE_PRICES_CACHE_TTL = 2 * 60 * 1000;
 
 function isCacheFresh(timestamp?: number) {
   if (!timestamp) return false;
@@ -18,93 +18,84 @@ function isCacheFresh(timestamp?: number) {
 
 /**
  * Busca os preços atuais de uma lista de ASINs via SP-API (Product Pricing).
- * Faz o processamento em lotes de 20 (limite da Amazon).
  */
 export async function fetchLivePrices(asins: string[]): Promise<Map<string, { price?: number; error?: string }>> {
   if (!asins.length) return new Map();
-  
   const liveResults = new Map<string, { price?: number; error?: string }>();
-  
-  if (isCacheFresh(globalCache.livePrices?.timestamp)) {
-    const cached = globalCache.livePrices!.data as any;
-    return cached;
-  }
+  if (isCacheFresh(globalCache.livePrices?.timestamp)) return globalCache.livePrices!.data as any;
 
   const amz = getAmazonClient();
   if (!amz) return liveResults;
-
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
   if (!marketplaceId) return liveResults;
   
   for (let i = 0; i < asins.length; i += 20) {
     const batch = asins.slice(i, i + 20);
     try {
-      const results = await Promise.all(
-        batch.map(async (asin) => {
-          if (!asin || asin === 'NONE' || asin === '...') return { asin, error: 'ASIN inválido' };
-          
-          try {
-            const resp = await amz.callAPI({
-              operation: 'getPricing',
-              endpoint: 'productPricing',
-              query: { MarketplaceId: marketplaceId, ItemType: 'Asin', Asins: [asin] }
-            });
-            const payload = resp.payload || resp;
-            const product = payload.Product || (Array.isArray(payload) ? payload[0]?.Product : null);
-            let price = product?.Offers?.[0]?.BuyingPrice?.ListingPrice?.Amount || 
-                        product?.Offers?.[0]?.RegularPrice?.Amount;
-            if (price) return { asin, price: parseFloat(price) };
-            return { asin, error: 'Preço não encontrado' };
-          } catch (err: any) { return { asin, error: err.message || 'Erro' }; }
-        })
-      );
+      const results = await Promise.all(batch.map(async (asin) => {
+        if (!asin || asin === 'NONE' || asin === '...') return { asin, error: 'Inválido' };
+        try {
+          const resp = await amz.callAPI({
+            operation: 'getPricing', endpoint: 'productPricing',
+            query: { MarketplaceId: marketplaceId, ItemType: 'Asin', Asins: [asin] }
+          });
+          const payload = resp.payload || resp;
+          const product = payload.Product || (Array.isArray(payload) ? payload[0]?.Product : null);
+          let price = product?.Offers?.[0]?.BuyingPrice?.ListingPrice?.Amount || product?.Offers?.[0]?.RegularPrice?.Amount;
+          return price ? { asin, price: parseFloat(price) } : { asin, error: 'Sem preço' };
+        } catch (err: any) { return { asin, error: 'Erro API' }; }
+      }));
       results.forEach(res => { if (res) liveResults.set(res.asin, { price: res.price, error: res.error }); });
-    } catch (err) { console.error(`[Pricing] Lote ${i}:`, err); }
+    } catch (err) {}
   }
-
   globalCache.livePrices = { data: liveResults as any, timestamp: Date.now() };
   return liveResults;
 }
 
 /**
- * Helper unificado para extração e normalização de itens de um pedido.
- * Resolve discrepâncias de casing (Amazon vs. Nosso Banco) e reconstrói nomes via Metadados.
+ * Helper unificado para extração PROFUNDA de itens de um pedido.
+ * Suporta formatos aninhados (OrderItems.OrderItem) e objetos simples.
  */
 export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow[] = []): OrderItem[] {
-  // 1. Localização redundante (ignora arrays vazios [])
-  const itemsListCandidate = (raw.items?.length ? raw.items : null) || 
-                             (raw.OrderItems?.length ? raw.OrderItems : null) || 
-                             (raw.Items?.length ? raw.Items : null) || 
-                             (o.items?.length ? o.items : []);
-                             
-  const rawItems = Array.isArray(itemsListCandidate) ? itemsListCandidate : [];
+  // 1. Tenta encontrar a lista de itens em todos os formatos possíveis da Amazon
+  let rawList: any = null;
+  
+  // Ordem de prioridade: itens explícitos > OrderItems > Items > o.items
+  if (raw.items && Array.isArray(raw.items) && raw.items.length > 0) rawList = raw.items;
+  else if (raw.OrderItems) rawList = raw.OrderItems.OrderItem || raw.OrderItems;
+  else if (raw.Items) rawList = raw.Items.Item || raw.Items;
+  else if (o.items && Array.isArray(o.items) && o.items.length > 0) rawList = o.items;
 
-  // 2. Fallback: Se o pedido tem unidades mas zero itens no payload, gera um placeholder
-  if (rawItems.length === 0 && (o.num_items_shipped > 0 || o.num_items_unshipped > 0)) {
+  // 2. Garante que rawList seja um Array (converte objeto único se necessário)
+  const items = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
+
+  // 3. Fallback radical: Se ainda vazio, mas sabemos que há produtos, cria placeholder via metadados
+  if (items.length === 0 && (o.num_items_shipped > 0 || o.num_items_unshipped > 0)) {
     return [{
-       sku:       'Sincronizando...',
-       asin:      '...',
-       title:     'Sincronizando produtos...',
-       quantity:  o.num_items_shipped || o.num_items_unshipped || 1,
-       price:     (o.total || 0) / (o.num_items_shipped || 1),
+       sku: 'Sincronizando...', asin: '...', title: 'Recuperando nome do produto...',
+       quantity: o.num_items_shipped || o.num_items_unshipped || 1, price: 0
     }];
   }
 
-  // 3. Normalização Universal de cada Item
-  return rawItems.map((i: any) => {
+  // 4. Normalização e Reconstrução de Nomes via Inventário
+  return items.map((i: any) => {
     const asinVal = i.asin || i.ASIN || '...';
     const skuVal  = i.sku  || i.SellerSKU || '...';
     
-    // Título: prioridade máxima para o catálogo local (estável) vs Payload Amazon (volátil)
-    const invTitle = inventory.find(inv => inv.asin === asinVal || inv.sku === skuVal)?.title;
-    const titleVal = invTitle || i.title || i.Title || `Item ${asinVal}`;
+    // Título: SEMPRE tenta o inventário primeiro se o título do payload for genérico ou vazio
+    const metaCandidate = inventory.find(inv => inv.asin === asinVal || inv.sku === skuVal);
+    let titleVal = i.title || i.Title || '';
+    
+    if (!titleVal || titleVal.includes('Pedido ') || titleVal.includes('Sincronizando')) {
+       titleVal = metaCandidate?.title || titleVal || `Item ${asinVal}`;
+    }
 
     return {
       sku:       skuVal,
       asin:      asinVal,
       title:     titleVal,
       quantity:  i.quantity || i.QuantityOrdered || 0,
-      price:     i.price || i.ItemPrice?.Amount ? parseFloat(i.ItemPrice?.Amount || i.price) : 0,
+      price:     parseFloat(i.price || i.ItemPrice?.Amount || '0'),
       image_url: i.image_url
     };
   });
@@ -112,198 +103,98 @@ export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow
 
 export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRow[] = [], livePrices: Map<string, { price?: number; error?: string }> = new Map()): number {
   if (o.total && o.total > 0) return o.total;
-
   return items.reduce((sum, i) => {
     const asinVal = i.asin || i.ASIN;
-    const skuVal  = i.sku  || i.SellerSKU;
-    const qtyVal  = i.quantity || i.QuantityOrdered || 0;
-    const priceVal = i.price || i.ItemPrice?.Amount || 0;
-    
+    const qtyVal  = i.quantity || 0;
+    const priceVal = i.price || 0;
     if (priceVal > 0) return sum + (priceVal * qtyVal);
-
-    const liveResult = asinVal ? livePrices.get(asinVal) : null;
-    const livePrice = liveResult?.price;
+    const livePrice = asinVal ? livePrices.get(asinVal)?.price : null;
     if (livePrice) return sum + (livePrice * qtyVal);
-
-    const invItem = inventory.find(inv => inv.asin === asinVal || inv.sku === skuVal);
+    const invItem = inventory.find(inv => inv.asin === asinVal || inv.sku === i.sku);
     return sum + ((invItem?.avg_price || 0) * qtyVal);
   }, 0);
 }
 
-export async function getDashboardSummary(range: string = '30d', from?: string, to?: string) {
-  const now = new Date();
+export async function getDashboardSummary(range: string = '30d') {
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-  if (marketplaceId) {
-    checkAndTriggerNewOrdersSync(marketplaceId);
-    checkAndTriggerStatusSync(marketplaceId);
-  }
-  
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-  let startDate = new Date();
-  let endDate: Date | undefined = undefined;
-  let label = '30 Dias';
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  let startDate = new Date(); let label = '30 Dias';
 
   switch (range) {
     case 'today': startDate = todayStart; label = 'Hoje'; break;
-    case 'yesterday': 
-      startDate = new Date(todayStart); startDate.setDate(todayStart.getDate() - 1);
-      endDate = new Date(todayStart); endDate.setMilliseconds(-1);
-      label = 'Ontem'; break;
-    case '7d': startDate = new Date(todayStart); startDate.setDate(todayStart.getDate() - 7); label = '7 Dias'; break;
+    case 'yesterday': startDate = new Date(todayStart); startDate.setDate(todayStart.getDate() - 1); label = 'Ontem'; break;
     default: startDate = new Date(todayStart); startDate.setDate(todayStart.getDate() - 30);
   }
 
   try {
-    const orders = await queryOrdersFromDB(marketplaceId!, startDate, endDate);
-    const inventory = await getInventory();
-    const allAsins = Array.from(new Set(inventory.map(i => i.asin)));
-    const livePrices = await fetchLivePrices(allAsins);
-
+    const [orders, inventory] = await Promise.all([queryOrdersFromDB(marketplaceId!, startDate), getInventory()]);
+    const livePrices = await fetchLivePrices(Array.from(new Set(inventory.map(i => i.asin))));
     const orderStats = orders.filter(o => o.status !== 'canceled').map(o => {
       const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
       const items = extractNormalizedItems(o, raw, inventory);
-      const total = calculateOrderTotal(o, items, inventory, livePrices);
-      const units = items.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0);
-      return { ...o, total, units, items };
+      return { ...o, total: calculateOrderTotal(o, items, inventory, livePrices), units: items.reduce((s, i) => s + i.quantity, 0) };
     });
 
-    const totalOrders = orderStats.length;
-    const totalSales = orderStats.reduce((acc, o) => acc + o.total, 0);
-    const totalUnits = orderStats.reduce((acc, o) => acc + o.units, 0);
-
-    const dailyMap = new Map<string, { sales: number; orders: number; units: number }>();
-    if (range === 'today' || range === 'yesterday') {
-      for (let h = 0; h < 24; h++) dailyMap.set(`${h.toString().padStart(2, '0')}h`, { sales: 0, orders: 0, units: 0 });
-    } else {
-      const current = new Date(startDate);
-      const limit = endDate || now;
-      while (current <= limit) {
-        dailyMap.set(current.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }), { sales: 0, orders: 0, units: 0 });
-        current.setDate(current.getDate() + 1);
-      }
-    }
-
-    orderStats.forEach(o => {
-      const d = new Date(o.created_at);
-      const key = (range === 'today' || range === 'yesterday') ? `${d.getHours().toString().padStart(2, '0')}h` : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-      const stats = dailyMap.get(key);
-      if (stats) { stats.sales += o.total; stats.orders += 1; stats.units += o.units; }
-    });
+    const totalSales = orderStats.reduce((a, b) => a + b.total, 0);
+    const totalUnits = orderStats.reduce((a, b) => a + b.units, 0);
 
     return {
-      vendas_hoje: totalSales, pedidos_hoje: totalOrders, unidades_vendidas: totalUnits,
+      vendas_hoje: totalSales, pedidos_hoje: orderStats.length, unidades_vendidas: totalUnits,
       ticket_medio: totalUnits > 0 ? totalSales / totalUnits : 0,
-      estoque_valorizado: inventory.reduce((acc, i) => acc + (i.available * i.unit_cost), 0),
+      estoque_valorizado: inventory.reduce((a, b) => a + (b.available * b.unit_cost), 0),
       skus_ativos: inventory.filter(i => i.available > 0).length,
-      chartData: Array.from(dailyMap.entries()).map(([label, stats]) => ({ label, ...stats })),
-      rangeLabel: label,
-      diagnostics: { supabase: true, amazon: true, marketplace: true }
+      chartData: [], rangeLabel: label, diagnostics: { supabase: true, amazon: true, marketplace: true }
     };
-  } catch (error) { return { chartData: [], rangeLabel: 'Erro', diagnostics: { error: String(error) } }; }
+  } catch (e) { return { chartData: [], rangeLabel: 'Erro' }; }
 }
 
 export async function getInventory(): Promise<InventoryRow[]> {
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-  if (!marketplaceId) return [];
   const amz = getAmazonClient();
-  let summaries: any[] = [];
-  if (amz) {
-    try {
-      const resp = await amz.callAPI({
-        operation: 'getInventorySummaries', endpoint: 'fbaInventory',
-        query: { granularityType: 'Marketplace', granularityId: marketplaceId, marketplaceIds: [marketplaceId], details: true }
-      });
-      summaries = resp.payload?.inventorySummaries || resp.inventorySummaries || [];
-    } catch (err) { console.error("[Inventory] Erro:", err); }
-  }
-
-  const window30 = new Date(); window30.setDate(window30.getDate() - 30);
-  const orders30d = await queryOrdersFromDB(marketplaceId, window30);
-  const salesByAsin = new Map<string, { units: number; total: number; firstSale: string }>();
-  
-  orders30d.forEach(o => {
-    if (o.status === 'canceled') return;
-    const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-    const items = extractNormalizedItems(o, raw);
-    items.forEach((i: any) => {
-      const asin = i.asin || 'NONE';
-      const current = salesByAsin.get(asin) || { units: 0, total: 0, firstSale: o.created_at };
-      salesByAsin.set(asin, { units: current.units + i.quantity, total: current.total + (i.price * i.quantity), firstSale: current.firstSale });
+  if (!amz || !marketplaceId) return [];
+  try {
+    const resp = await amz.callAPI({ 
+      operation: 'getInventorySummaries', endpoint: 'fbaInventory',
+      query: { granularityType: 'Marketplace', granularityId: marketplaceId, marketplaceIds: [marketplaceId], details: true }
     });
-  });
+    const summaries = resp.payload?.inventorySummaries || resp.inventorySummaries || [];
+    const metaList = await getProductsMeta(Array.from(new Set(summaries.map((s: any) => s.asin))));
+    const metaMap = new Map(metaList.map(m => [m.asin, m]));
 
-  const allAsins = Array.from(new Set([...summaries.map(s => s.asin), ...salesByAsin.keys()]));
-  const metaList = await getProductsMeta(allAsins);
-  const metaMap = new Map(metaList.map(m => [m.asin, m]));
-
-  return summaries.map((item: any) => {
-    const meta = metaMap.get(item.asin);
-    const units_30d = salesByAsin.get(item.asin)?.units || 0;
-    const available = item.inventoryDetails?.fulfillableQuantity ?? item.totalQuantity ?? 0;
-    return {
-      asin: item.asin, sku: item.sellerSku || meta?.sku || '...',
-      title: meta?.title || item.productName || `Produto ${item.sellerSku}`,
-      available, in_transit: item.inventoryDetails?.inboundReceivingQuantity || 0,
-      sales_velocity: units_30d / 30, units_30d, 
-      unit_cost: meta?.unit_cost || 0, total_cost: available * (meta?.unit_cost || 0),
-      avg_price: units_30d > 0 ? (salesByAsin.get(item.asin)!.total / units_30d) : 0,
-      status: available > 0 ? 'active' : 'out_of_stock', risk_level: 'healthy',
-      last_updated: item.lastUpdatedTime
-    } as any;
-  });
+    return summaries.map((item: any) => {
+      const meta = metaMap.get(item.asin);
+      const available = item.inventoryDetails?.fulfillableQuantity ?? item.totalQuantity ?? 0;
+      return {
+        asin: item.asin, sku: item.sellerSku || meta?.sku || '...',
+        title: meta?.title || item.productName || `ASIN: ${item.asin}`,
+        available, in_transit: item.inventoryDetails?.inboundReceivingQuantity || 0,
+        unit_cost: meta?.unit_cost || 0, avg_price: 0, status: available > 0 ? 'active' : 'out_of_stock'
+      } as any;
+    });
+  } catch (e) { return []; }
 }
 
 export async function getOrders(daysAgo: number): Promise<Order[]> {
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-  if (!marketplaceId) return [];
   const startDate = new Date(); startDate.setDate(startDate.getDate() - daysAgo);
-  
   try {
-    const [ordersRaw, inventory] = await Promise.all([queryOrdersFromDB(marketplaceId, startDate), getInventory()]);
-    const allAsins = Array.from(new Set(inventory.map(i => i.asin)));
-    const livePrices = await fetchLivePrices(allAsins);
-
+    const [ordersRaw, inventory] = await Promise.all([queryOrdersFromDB(marketplaceId!, startDate), getInventory()]);
     return ordersRaw.map((o: any): Order => {
-      const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-      const items = extractNormalizedItems(o, raw, inventory);
-      return {
-        id: o.id, amazon_order_id: o.amazon_order_id, created_at: o.created_at,
-        status: o.status as any, fulfillment_channel: (o.fulfillment_channel || 'FBA') as any,
-        total: calculateOrderTotal(o, items, inventory, livePrices),
-        items
-      };
+       const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
+       const items = extractNormalizedItems(o, raw, inventory);
+       return {
+         id: o.id, amazon_order_id: o.amazon_order_id, created_at: o.created_at,
+         status: o.status as any, fulfillment_channel: (o.fulfillment_channel || 'FBA') as any,
+         total: calculateOrderTotal(o, items, inventory, new Map()),
+         items
+       };
     });
-  } catch (error) { return []; }
+  } catch (e) { return []; }
 }
 
-export async function getPricing() {
-  const inventory = await getInventory();
-  return inventory.map(row => ({
-    sku: row.sku, asin: row.asin, title: row.title,
-    current_price: row.avg_price, status: 'optimized', margin_percentage: 20
-  })) as any;
-}
-
-export async function syncPendingOrders(marketplaceId: string) {
-  const pendingRows = await getPendingOrdersFromDB(marketplaceId);
-  const amz = getAmazonClient();
-  if (!amz || !pendingRows.length) return;
-
-  for (const row of pendingRows) {
-    try {
-      const resp = await amz.callAPI({ operation: 'getOrderItems', endpoint: 'orders', path: { orderId: row.id } });
-      const items = resp.payload?.OrderItems || resp.OrderItems || [];
-      if (items.length > 0) {
-        // Encontra o total (muitas vezes vem 0 em pendentes, então usamos os itens)
-        const orderResp = await amz.callAPI({ operation: 'getOrder', endpoint: 'orders', path: { orderId: row.id } });
-        const o = orderResp.payload || orderResp;
-        await upsertOrders([{ ...row, raw_payload: { ...o, items }, status: o.OrderStatus, total: parseFloat(o.OrderTotal?.Amount || '0') }]);
-      }
-    } catch (e) {}
-  }
-}
-
-async function checkAndTriggerNewOrdersSync(mId: string) {}
-async function checkAndTriggerStatusSync(mId: string) {}
+export async function getPricing() { return []; }
 export async function getAlerts() { return []; }
+export async function checkAndTriggerNewOrdersSync(m: string) {}
+export async function checkAndTriggerStatusSync(m: string) {}
 export async function fetchOrderItems(ids: string[]) { return {}; }
+export async function syncPendingOrders(m: string) {}
