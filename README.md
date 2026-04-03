@@ -65,7 +65,15 @@ A professional B2B SaaS dashboard designed to manage Amazon inventory, orders, a
 
 ## Deployment
 
-This project is ready to be deployed on Vercel. Ensure you configure the Environment Variables in the Vercel dashboard.
+### Cloudflare Pages / Workers (via OpenNext)
+
+1. **Build Settings**: 
+   - **Build Command**: `npm run build:cf` (Crucial to avoid infinite loops)
+   - **Output Directory**: `.next` (Cloudflare will detect the worker from `wrangler.jsonc`)
+2. **Environment Variables**:
+   - Add all keys from `.env.example` (including Supabase and Amazon credentials) to the Cloudflare dashboard.
+3. **Deploy**:
+   - Every push to `main` will trigger a build and deploy.
 
 ## Maintenance
 
