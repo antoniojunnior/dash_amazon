@@ -579,29 +579,41 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
     const ordersRaw = await queryOrdersFromDB(marketplaceId, startDate);
     
     return ordersRaw.map((o: any): Order => {
+      // 1. Extração profunda do payload (resolvendo duplicatas e aninhamentos)
       const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-      const items = (raw.items || raw.OrderItems || []) as any[];
       
+      // 2. Localização redundante da lista de itens (suporta OrderItems, items e raw_payload interno)
+      const itemsListCandidate = raw.items || raw.OrderItems || o.items || [];
+      const rawItems = Array.isArray(itemsListCandidate) ? itemsListCandidate : [];
+      
+      // 3. Normalização Universal de cada Item (Recuperação de nomes e SKUs)
+      const normalizedItems: OrderItem[] = rawItems.map((i: any) => {
+        const asinVal = i.asin || i.ASIN || '...';
+        const skuVal  = i.sku  || i.SellerSKU || '...';
+        
+        // Prioridade de Título: títuo interno > título Amazon > fallback ASIN
+        const titleVal = i.title || i.Title || 
+                         inventory.find(inv => inv.asin === asinVal)?.title || 
+                         `Item ${asinVal}`;
+
+        return {
+          sku: skuVal,
+          asin: asinVal,
+          title: titleVal,
+          quantity: i.quantity || i.QuantityOrdered || 0,
+          price: i.price || i.ItemPrice?.Amount ? parseFloat(i.ItemPrice?.Amount || i.price) : 0,
+          image_url: i.image_url
+        };
+      });
+
       return {
         id: o.id,
         amazon_order_id: o.amazon_order_id,
         created_at: o.created_at,
         status: o.status as any,
         fulfillment_channel: (o.fulfillment_channel || 'FBA') as any,
-        total: calculateOrderTotal(o, items, inventory, livePrices),
-        items: items.map((i: any) => {
-          const invItem = inventory.find(inv => inv.asin === i.asin || inv.sku === i.sku);
-          const liveResult = livePrices.get(i.asin);
-          const livePrice = liveResult?.price;
-          return {
-            sku: i.sku || i.SellerSKU || '...',
-            asin: i.asin || i.ASIN || '...',
-            title: i.title || i.Title || `Produto ${i.sku || i.SellerSKU}`,
-            quantity: i.quantity || i.QuantityOrdered || 0,
-            price: i.price || i.ItemPrice?.Amount || livePrice || invItem?.avg_price || 0,
-            image_url: i.image_url
-          };
-        })
+        total: calculateOrderTotal(o, normalizedItems, inventory, livePrices),
+        items: normalizedItems
       };
     });
   } catch (error) {

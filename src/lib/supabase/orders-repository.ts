@@ -79,9 +79,11 @@ export function toOrderRow(o: any, marketplaceId: string): any {
     currency:            o.currency || o.OrderTotal?.CurrencyCode || 'BRL',
     num_items_shipped:   o.num_items_shipped ?? o.NumberOfItemsShipped ?? (o.items?.[0]?.quantity || 0),
     num_items_unshipped: o.num_items_unshipped ?? o.NumberOfItemsUnshipped ?? 0,
-    // Guardamos o objeto completo (incluindo items reais se disponíveis) no raw_payload
-    raw_payload:         o, 
-    updated_at:          new Date().toISOString()
+    // NOVO: Evita duplo aninhamento e garante que Itens estejam na raiz do payload
+    raw_payload: (o.raw_payload && typeof o.raw_payload === 'object') 
+      ? { ...o.raw_payload, items: o.items || o.raw_payload.items || o.raw_payload.OrderItems || [] }
+      : { ...o, items: o.items || o.OrderItems || [] },
+    updated_at: new Date().toISOString()
   };
 }
 
