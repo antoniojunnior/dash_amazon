@@ -111,17 +111,20 @@ export async function fetchLivePrices(asins: string[]): Promise<Map<string, { pr
 export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRow[] = [], livePrices: Map<string, { price?: number; error?: string }> = new Map()): number {
   if (o.total && o.total > 0) return o.total;
 
-  const itemsTotal = items.reduce((sum, i) => sum + (i.price * i.quantity || 0), 0);
-  if (itemsTotal > 0) return itemsTotal;
-
-  // Fallback: Preço Atual (Live) > Preço Médio (Histórico)
   const fallbackTotal = items.reduce((sum, i) => {
-    const liveResult = livePrices.get(i.asin);
-    const livePrice = liveResult?.price;
-    if (livePrice) return sum + (livePrice * i.quantity);
+    const asinVal = i.asin || i.ASIN;
+    const skuVal  = i.sku  || i.SellerSKU;
+    const qtyVal  = i.quantity || i.QuantityOrdered || 0;
+    const priceVal = i.price || i.ItemPrice?.Amount || 0;
+    
+    if (priceVal > 0) return sum + (priceVal * qtyVal);
 
-    const invItem = inventory.find(inv => inv.asin === i.asin || inv.sku === i.sku);
-    return sum + ((invItem?.avg_price || 0) * i.quantity);
+    const liveResult = asinVal ? livePrices.get(asinVal) : null;
+    const livePrice = liveResult?.price;
+    if (livePrice) return sum + (livePrice * qtyVal);
+
+    const invItem = inventory.find(inv => inv.asin === asinVal || inv.sku === skuVal);
+    return sum + ((invItem?.avg_price || 0) * qtyVal);
   }, 0);
 
   return fallbackTotal;
@@ -211,9 +214,11 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       .map(o => {
         const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
         // Normalização Universal: Suporta camelCase e PascalCase (Amazon Nativa)
-        const rawItems = (raw.items || raw.OrderItems || []) as any[];
+        const rawItemsList = raw.items || raw.OrderItems || raw.Items || [];
+        const rawItems = Array.isArray(rawItemsList) ? rawItemsList : [];
+        
         const items = rawItems.map(i => ({
-          title: i.title || i.Title || `Pedido ${o.id}`,
+          title: i.title || i.Title || inventory.find(inv => inv.asin === (i.asin || i.ASIN))?.title || `Pedido ${o.id}`,
           asin:  i.asin  || i.ASIN,
           sku:   i.sku   || i.SellerSKU || '...',
           quantity: i.quantity || i.QuantityOrdered || 1,
@@ -361,22 +366,25 @@ export async function getInventory(): Promise<InventoryRow[]> {
   orders30d.forEach(o => {
     if (o.status === 'canceled') return;
     const date = o.created_at;
-    // NOVO: Evita duplo aninhamento e garante que Itens estejam na raiz do payload
-    const raw = (o.raw_payload && typeof o.raw_payload === 'object') 
-      ? { ...o.raw_payload, items: o.items || o.raw_payload.items || o.raw_payload.OrderItems || o.raw_payload.Items || [] }
-      : { ...o, items: o.items || o.OrderItems || o.Items || [] };
-    const items = raw.items || [];
+    // NOVO: Normalização redundante para inventário
+    const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
+    const itemsRaw = raw.items || raw.OrderItems || raw.Items || [];
+    const items = Array.isArray(itemsRaw) ? itemsRaw : [];
     const hasRealRevenue = o.total > 0;
     
     items.forEach((i: any) => {
       const asin = i.asin || i.ASIN || 'NONE'; 
       const current = salesByAsin.get(asin) || { units: 0, total: 0, firstSale: date };
       const oldest = date < current.firstSale ? date : current.firstSale;
+      
+      const qty = i.quantity || i.QuantityOrdered || 1;
+      const price = i.price || i.ItemPrice?.Amount || 0;
+
       const unitRevenue = hasRealRevenue
-        ? ((i.price || i.ItemPrice?.Amount || 0) > 0 ? (i.price || i.ItemPrice?.Amount || 0) * (i.quantity || i.QuantityOrdered || 1) : (o.total / (o.num_items_shipped || items.length)) * (i.quantity || 1))
+        ? (price > 0 ? price * qty : (o.total / (o.num_items_shipped || items.length)) * qty)
         : 0;
       salesByAsin.set(asin, {
-        units: current.units + (i.quantity || i.QuantityOrdered || 0),
+        units: current.units + qty,
         total: current.total + unitRevenue,
         firstSale: oldest
       });
