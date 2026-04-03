@@ -721,6 +721,26 @@ export async function syncPendingOrders(marketplaceId: string) {
         // buscamos os itens se eles não estiverem presentes no raw_payload atual
         const itemsMap = await fetchOrderItems(updatedOrders.map((o: any) => o.AmazonOrderId));
 
+        // NOVO: Propaga os nomes dos produtos para a tabela de catálogo global (Estoque)
+        const { upsertProductMeta } = await import('../supabase/orders-repository');
+        for (const oId of Object.keys(itemsMap)) {
+          const items = itemsMap[oId];
+          for (const item of items) {
+            if (item.asin && item.title && !item.title.includes('Sincronizando') && !item.title.includes('Pedido ')) {
+              await upsertProductMeta({
+                asin: item.asin,
+                sku: item.sku || '...',
+                title: item.title,
+                unit_cost: 0, // Mantém o custo atual se já existir via conflict handling
+              });
+            }
+          }
+        }
+
+        // Limpa cache para refletir no Dashboard
+        globalCache.summary = undefined;
+        globalCache.inventory = undefined;
+
         const rowsToUpsert = updatedOrders.map((o: any) => {
           const total = o.OrderTotal?.Amount ? parseFloat(o.OrderTotal.Amount) : 0;
           return {
@@ -795,7 +815,25 @@ export async function syncNewOrders(marketplaceId: string) {
         const mappedOrders = mapRawOrdersForBackfill(batchWithItems);
         const rows = mappedOrders.map((o: any) => toOrderRow(o, marketplaceId));
         
+        // NOVO: Propaga os nomes dos produtos para o catálogo de Estoque
+        const { upsertProductMeta } = await import('../supabase/orders-repository');
+        for (const oId of Object.keys(itemsMap)) {
+          const items = itemsMap[oId];
+          for (const item of items) {
+            if (item.asin && item.title && !item.title.includes('Sincronizando') && !item.title.includes('Pedido ')) {
+              await upsertProductMeta({
+                asin: item.asin,
+                sku: item.sku || '...',
+                title: item.title,
+              });
+            }
+          }
+        }
+
+        // Salva backfill no DB e limpa cache
         await upsertOrders(rows);
+        globalCache.summary = undefined;
+        globalCache.inventory = undefined;
         totalFetched += batch.length;
       }
 

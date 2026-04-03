@@ -49,6 +49,21 @@ export async function GET(req: NextRequest) {
     const orderIds = ordersToRepair.map(o => o.amazon_order_id);
     const itemsMap = await fetchOrderItems(orderIds);
 
+    // NOVO: Propaga os nomes dos produtos para o catálogo (Estoque)
+    const { upsertProductMeta } = await import('@/lib/supabase/orders-repository');
+    for (const oId of Object.keys(itemsMap)) {
+      const items = itemsMap[oId];
+      for (const item of items) {
+        if (item.asin && item.title && !item.title.includes('Sincronizando') && !item.title.includes('Pedido ')) {
+          await upsertProductMeta({
+            asin: item.asin,
+            sku: item.sku || '...',
+            title: item.title,
+          });
+        }
+      }
+    }
+
     const repairedRows = ordersToRepair.map(o => {
       const items = itemsMap[o.amazon_order_id] || [];
       // Recalcula o total com base nos novos itens + inteligência de preços
