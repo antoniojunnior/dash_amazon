@@ -432,6 +432,11 @@ export async function getInventory(): Promise<InventoryRow[]> {
     if (!stats && globalSales && inventory.length === 1) stats = globalSales;
 
     const meta = metaMap.get(row.asin);
+    
+    // Priorização: Metadados do Banco > Dados da Amazon API (que costumam vir incompletos)
+    if (meta?.title) row.title = meta.title;
+    if (meta?.sku && (!row.sku || row.sku === '...' || row.sku === 'NONE')) row.sku = meta.sku;
+
     row.units_30d = stats?.units || 0;
     row.avg_price = row.units_30d > 0 ? (stats!.total / row.units_30d) : 0;
     
