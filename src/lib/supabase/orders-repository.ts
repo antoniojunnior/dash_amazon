@@ -69,14 +69,14 @@ export function toOrderRow(o: any, marketplaceId: string): any {
     id:                  idValue,
     amazon_order_id:     idValue,
     marketplace_id:      marketplaceId,
-    created_at:          o.created_at,
-    status:              o.status,
-    fulfillment_channel: o.fulfillment_channel || 'FBA',
-    total:               o.total || 0,
-    currency:            'BRL',
-    num_items_shipped:   o.num_items_shipped || (o.items?.[0]?.quantity || 0),
-    num_items_unshipped: 0,
-    // Guardamos o objeto completo (incluindo items mapeados) no raw_payload
+    created_at:          o.created_at || o.PurchaseDate,
+    status:              o.status || o.OrderStatus,
+    fulfillment_channel: o.fulfillment_channel || (o.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM') || 'FBA',
+    total:               o.total || (o.OrderTotal?.Amount ? parseFloat(o.OrderTotal.Amount) : 0),
+    currency:            o.currency || o.OrderTotal?.CurrencyCode || 'BRL',
+    num_items_shipped:   o.num_items_shipped ?? o.NumberOfItemsShipped ?? (o.items?.[0]?.quantity || 0),
+    num_items_unshipped: o.num_items_unshipped ?? o.NumberOfItemsUnshipped ?? 0,
+    // Guardamos o objeto completo (incluindo items reais se disponíveis) no raw_payload
     raw_payload:         o, 
     updated_at:          new Date().toISOString()
   };

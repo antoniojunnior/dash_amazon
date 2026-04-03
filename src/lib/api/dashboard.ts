@@ -579,7 +579,6 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
   }
 }
 
-
 export async function getPricing() {
   try {
     const inventory = await getInventory();
@@ -629,9 +628,47 @@ export async function getPricing() {
     return [];
   }
 }
+
+/**
+ * Busca os itens de cada pedido em lote para garantir nomes reais de produtos.
+ * Implementa delay de 500ms entre chamadas para evitar rate limit (0.5 req/s).
+ */
+async function fetchOrderItems(orderIds: string[]): Promise<Record<string, any[]>> {
+  const amz = getAmazonClient();
+  if (!amz || orderIds.length === 0) return {};
+
+  const orderItemsMap: Record<string, any[]> = {};
+  
+  for (const orderId of orderIds) {
+    try {
+      const response = await amz.callAPI({
+        operation: 'getOrderItems',
+        endpoint: 'orders',
+        path: { orderId }
+      });
+
+      const batch = response.payload?.OrderItems || response.OrderItems || [];
+      orderItemsMap[orderId] = batch.map((i: any) => ({
+        title:    i.Title || `Produto ${i.SellerSKU || i.ASIN}`,
+        sku:      i.SellerSKU || '...',
+        asin:     i.ASIN || '...',
+        quantity: i.QuantityOrdered || 0,
+        price:    i.ItemPrice?.Amount ? parseFloat(i.ItemPrice.Amount) / (i.QuantityOrdered || 1) : 0,
+      }));
+
+      // Respeita o rate limit da Amazon (0.5 req/s para getOrderItems)
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (e) {
+      console.warn(`[Sync] Falha ao buscar itens para pedido ${orderId}:`, e);
+      orderItemsMap[orderId] = [];
+    }
+  }
+
+  return orderItemsMap;
+}
+
 /**
  * Sincroniza o status e o valor real de faturamento para pedidos pendentes. 
- * Realiza chamadas em lotes de 50 IDs (limite da Amazon).
  */
 export async function syncPendingOrders(marketplaceId: string) {
   const amz = getAmazonClient();
@@ -658,8 +695,11 @@ export async function syncPendingOrders(marketplaceId: string) {
 
       const updatedOrders = response.payload?.Orders || response.Orders || [];
       if (updatedOrders.length > 0) {
+        // Para os pedidos que mudaram de status ou precisam de atualização, 
+        // buscamos os itens se eles não estiverem presentes no raw_payload atual
+        const itemsMap = await fetchOrderItems(updatedOrders.map((o: any) => o.AmazonOrderId));
+
         const rowsToUpsert = updatedOrders.map((o: any) => {
-          // Mantemos o payload original se possível, mas com status/total novos
           const total = o.OrderTotal?.Amount ? parseFloat(o.OrderTotal.Amount) : 0;
           return {
             id:                  o.AmazonOrderId,
@@ -672,7 +712,7 @@ export async function syncPendingOrders(marketplaceId: string) {
             currency:            o.OrderTotal?.CurrencyCode || 'BRL',
             num_items_shipped:   o.NumberOfItemsShipped || 0,
             num_items_unshipped: o.NumberOfItemsUnshipped || 0,
-            raw_payload:         o, // Payload atualizado da Amazon
+            raw_payload:         { ...o, items: itemsMap[o.AmazonOrderId] || [] }, 
             updated_at:          new Date().toISOString()
           };
         });
@@ -722,11 +762,15 @@ export async function syncNewOrders(marketplaceId: string) {
       const batch = response.payload?.Orders || response.Orders || [];
       
       if (batch.length > 0) {
+        // Busca itens para este lote de pedidos
+        const itemsMap = await fetchOrderItems(batch.map((o: any) => o.AmazonOrderId));
+
         const { mapRawOrdersForBackfill } = await import('./backfill-helpers');
         const { toOrderRow, upsertOrders } = await import('../supabase/orders-repository');
         
         // Mapeia PascalCase (Amazon) para formato interno (snake_case)
-        const mappedOrders = mapRawOrdersForBackfill(batch);
+        const batchWithItems = batch.map((o: any) => ({ ...o, items: itemsMap[o.AmazonOrderId] || [] }));
+        const mappedOrders = mapRawOrdersForBackfill(batchWithItems);
         const rows = mappedOrders.map((o: any) => toOrderRow(o, marketplaceId));
         
         await upsertOrders(rows);

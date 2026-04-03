@@ -13,25 +13,32 @@
  * incluindo o motor de imputação de receita para pedidos pendentes.
  */
 export function mapRawOrdersForBackfill(amzOrders: any[]): any[] {
-  const mapped = amzOrders.map((o: any) => ({
-    id:                  o.AmazonOrderId,
-    amazon_order_id:     o.AmazonOrderId,
-    created_at:          o.PurchaseDate,
-    status:              o.OrderStatus.toLowerCase() === 'unshipped'
-                           ? 'pending'
-                           : o.OrderStatus.toLowerCase(),
-    fulfillment_channel: o.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM',
-    total:               o.OrderTotal ? parseFloat(o.OrderTotal.Amount) : 0,
-    items: [{
-      title:    `Pedido ${o.AmazonOrderId}`,
-      sku:      '...',
-      quantity: (o.NumberOfItemsShipped ?? 0) + (o.NumberOfItemsUnshipped ?? 0),
-    }],
-  }));
+  const mapped = amzOrders.map((o: any) => {
+    // Se o pedido já tiver itens (ex: de uma busca getOrderItems prévia), usamos eles
+    const existingItems = o.items || [];
+    
+    return {
+      id:                  o.AmazonOrderId || o.id,
+      amazon_order_id:     o.AmazonOrderId || o.id,
+      created_at:          o.PurchaseDate || o.created_at,
+      status:              (o.OrderStatus || o.status || 'Pending').toLowerCase() === 'unshipped'
+                             ? 'pending'
+                             : (o.OrderStatus || o.status || 'Pending').toLowerCase(),
+      fulfillment_channel: (o.FulfillmentChannel === 'AFN' || o.fulfillment_channel === 'FBA') ? 'FBA' : 'FBM',
+      total:               o.OrderTotal ? parseFloat(o.OrderTotal.Amount) : (o.total || 0),
+      items:               existingItems.length > 0 ? existingItems : [{
+        title:    `Sincronizando produtos...`,
+        sku:      '...',
+        asin:     '...',
+        quantity: (o.NumberOfItemsShipped ?? 0) + (o.NumberOfItemsUnshipped ?? 0),
+        price:    0
+      }],
+    };
+  });
 
-  // Motor de Imputação de Receita Pendente
-  // Pedidos "pending" chegam com total = 0 da Amazon.
-  // Estimamos com base no ticket médio dos pedidos aprovados do mesmo lote.
+  // Motor de Imputação de Receita Pendente (Estratégia Melhorada)
+  // Se o total é 0, tentamos estimar pelo ticket médio do lote ATUAL.
+  // Nota: O dashboard.ts ainda fará uma estimativa mais precisa usando Live Prices se este falhar.
   const approved    = mapped.filter(o => o.total > 0 && o.status !== 'canceled');
   let avgTicket     = 0;
 
