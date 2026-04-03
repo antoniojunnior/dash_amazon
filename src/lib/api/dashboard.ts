@@ -361,8 +361,11 @@ export async function getInventory(): Promise<InventoryRow[]> {
   orders30d.forEach(o => {
     if (o.status === 'canceled') return;
     const date = o.created_at;
-    const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
-    const items = raw.items || raw.OrderItems || [];
+    // NOVO: Evita duplo aninhamento e garante que Itens estejam na raiz do payload
+    const raw = (o.raw_payload && typeof o.raw_payload === 'object') 
+      ? { ...o.raw_payload, items: o.items || o.raw_payload.items || o.raw_payload.OrderItems || o.raw_payload.Items || [] }
+      : { ...o, items: o.items || o.OrderItems || o.Items || [] };
+    const items = raw.items || [];
     const hasRealRevenue = o.total > 0;
     
     items.forEach((i: any) => {
@@ -582,8 +585,8 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
       // 1. Extração profunda do payload (resolvendo duplicatas e aninhamentos)
       const raw = typeof o.raw_payload === 'string' ? JSON.parse(o.raw_payload) : (o.raw_payload || {});
       
-      // 2. Localização redundante da lista de itens (suporta OrderItems, items e raw_payload interno)
-      const itemsListCandidate = raw.items || raw.OrderItems || o.items || [];
+      // 2. Localização redundante da lista de itens (suporta OrderItems, Items, items e raw_payload interno)
+      const itemsListCandidate = raw.items || raw.OrderItems || raw.Items || o.items || [];
       const rawItems = Array.isArray(itemsListCandidate) ? itemsListCandidate : [];
       
       // 3. Normalização Universal de cada Item (Recuperação de nomes e SKUs)
