@@ -39,6 +39,11 @@ export interface DashboardSummary {
   buybox_win: number;
   chartData?: ChartDataPoint[];
   rangeLabel?: string;
+  diagnostics?: {
+    supabase: boolean;
+    amazon: boolean;
+    marketplace: boolean;
+  };
 }
 
 // Orders
@@ -69,20 +74,20 @@ export interface InventoryRow {
   fulfillment: 'FBA' | 'FBM';
   available: number;
   in_transit: number;
-  sales_velocity: number;   // Vendas diárias (últimos 30 dias)
+  sales_velocity: number;
   coverage_days: number;
   risk_level: 'critical' | 'warning' | 'healthy' | 'excess';
   status: 'active' | 'inactive' | 'out_of_stock' | 'at_risk';
-  unit_cost: number;        // Custo de Aquisição (COGS)
-  lead_time_days: number;   // Prazo de Reposição (Compra -> Amazon Live)
-  total_cost: number;       // Capital Imobilizado (Available * UnitCost)
-  avg_price: number;        // Preço Médio de Venda (Amazon)
-  current_price: number;    // Preço Atual (Live SP-API > Historical)
+  unit_cost: number;
+  lead_time_days: number;
+  total_cost: number;
+  avg_price: number;
+  current_price: number;
   price_source: 'live' | 'historical';
-  potential_revenue: number; // Projeção de Faturamento (Available * CurrentPrice)
-  restock_quantity: number; // Qtd necessária para 30 dias de giro
-  restock_cost: number;     // Capital de Giro necessário para reposição
-  units_30d: number;        // Volume total vendido no mês
+  potential_revenue: number;
+  restock_quantity: number;
+  restock_cost: number;
+  units_30d: number;
   image_url?: string;
   last_updated?: string;
 }
@@ -120,7 +125,8 @@ export interface Alert {
   severity: 'critical' | 'high' | 'info';
   title: string;
   description: string;
-  reference_id?: string; // sku or order id
+  message?: string; // CORREÇÃO: Propriedade esperada pela página Dashboard
+  reference_id?: string;
   created_at: string;
   is_read: boolean;
 }

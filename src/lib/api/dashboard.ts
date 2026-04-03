@@ -1,6 +1,6 @@
 import { getAmazonClient } from '../amazon/client';
 import { getProductsMeta, queryOrdersFromDB, getPendingOrdersFromDB, recordSync, upsertOrders, toOrderRow } from '../supabase/orders-repository';
-import { InventoryRow, Order, OrderItem } from '@/types';
+import { InventoryRow, Order, OrderItem, Alert, PricingRow, DashboardSummary } from '@/types';
 
 // Cache global simples
 let globalCache: {
@@ -46,9 +46,6 @@ export async function fetchLivePrices(asins: string[]): Promise<Map<string, { pr
   return liveResults;
 }
 
-/**
- * Cálculo de total do pedido com inteligência de fallback.
- */
 export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRow[] = [], livePrices: Map<string, { price?: number; error?: string }> = new Map()): number {
   if (o.total && o.total > 0) return o.total;
   return items.reduce((sum, i) => {
@@ -59,18 +56,14 @@ export function calculateOrderTotal(o: any, items: any[], inventory: InventoryRo
     const livePrice = asinVal ? livePrices.get(asinVal)?.price : null;
     if (livePrice) return sum + (livePrice * qtyVal);
     const invItem = inventory.find(inv => inv.asin === asinVal || inv.sku === i.sku);
-    return sum + ((invItem?.unit_cost || 0) * 1.5 * qtyVal); // Fallback estimado
+    return sum + ((invItem?.unit_cost || 0) * 1.5 * qtyVal);
   }, 0);
 }
 
-/**
- * Extração de itens com robustez máxima.
- */
 export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow[] = []): OrderItem[] {
   let rawList: any = null;
   const keys = Object.keys(raw || {});
   const findK = (t: string) => keys.find(k => k.toLowerCase() === t.toLowerCase());
-
   const kItems = findK('items');
   const kOrderItems = findK('OrderItems');
 
@@ -82,7 +75,6 @@ export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow
   }
   
   if (!rawList && o.items && Array.isArray(o.items) && o.items.length > 0) rawList = o.items;
-
   let items = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
 
   if (items.length === 0) {
@@ -100,20 +92,18 @@ export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow
     if (!title || title.includes('Pedido ') || title.includes('Sincronizando')) {
        title = meta?.title || title || `Item: ${asin}`;
     }
-    return { 
-      sku, asin, title, 
-      quantity: i.quantity || i.QuantityOrdered || 0, 
-      price: parseFloat(i.price || i.ItemPrice?.Amount || '0') 
-    };
+    return { sku, asin, title, quantity: i.quantity || i.QuantityOrdered || 0, price: parseFloat(i.price || i.ItemPrice?.Amount || '0') };
   });
 }
 
-export async function getDashboardSummary(range: string = '30d') {
+// CORREÇÃO BUILD: Garantir conformidade total com DashboardSummary interface
+export async function getDashboardSummary(range: string = '30d', from?: string, to?: string): Promise<DashboardSummary> {
   const mId = process.env.AMAZON_MARKETPLACE_ID;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   let start = new Date();
   if (range === 'today') start = today;
   else if (range === 'yesterday') { start = new Date(today); start.setDate(today.getDate() - 1); }
+  else if (from) start = new Date(from);
   else start.setDate(today.getDate() - 30);
 
   try {
@@ -126,8 +116,22 @@ export async function getDashboardSummary(range: string = '30d') {
     });
     const sales = stats.reduce((a, b) => a + b.total, 0);
     const units = stats.reduce((a, b) => a + b.units, 0);
-    return { vendas_hoje: sales, pedidos_hoje: stats.length, unidades_vendidas: units, ticket_medio: units > 0 ? sales / units : 0, estoque_valorizado: inventory.reduce((a, b) => a + (b.available * b.unit_cost), 0), skus_ativos: inventory.length, chartData: [], rangeLabel: range, diagnostics: {} };
-  } catch (e) { return { chartData: [], rangeLabel: 'Erro' }; }
+
+    return { 
+      vendas_hoje: sales, vendas_hoje_var: 0,
+      pedidos_hoje: stats.length, pedidos_hoje_var: 0,
+      unidades_vendidas: units, 
+      ticket_medio: units > 0 ? sales / units : 0, ticket_medio_var: 0,
+      estoque_valorizado: inventory.reduce((a, b) => a + (b.available * b.unit_cost), 0), 
+      skus_ativos: inventory.length, 
+      acos_medio: 0, acos_medio_var: 0, 
+      buybox_win: 0,
+      chartData: [], rangeLabel: range,
+      diagnostics: { supabase: true, amazon: true, marketplace: true }
+    } as DashboardSummary;
+  } catch (e) { 
+    return { vendas_hoje: 0, vendas_hoje_var: 0, pedidos_hoje: 0, pedidos_hoje_var: 0, ticket_medio: 0, ticket_medio_var: 0, estoque_valorizado: 0, skus_ativos: 0, acos_medio: 0, acos_medio_var: 0, buybox_win: 0, diagnostics: { supabase: false, amazon: false, marketplace: false } } as DashboardSummary; 
+  }
 }
 
 export async function getInventory(): Promise<InventoryRow[]> {
@@ -160,41 +164,28 @@ export async function getOrders(daysAgo: number): Promise<Order[]> {
   } catch (e) { return []; }
 }
 
-/**
- * SINCRONIZAÇÃO DE NOVOS PEDIDOS (Utilizado pelo Cron)
- */
 export async function syncNewOrders(marketplaceId: string) {
   const amz = getAmazonClient();
   if (!amz) return;
-  const createdAfter = new Date();
-  createdAfter.setHours(createdAfter.getHours() - 36); // Janela de segurança de 36h
-
+  const createdAfter = new Date(); createdAfter.setHours(createdAfter.getHours() - 36);
   try {
-    const resp = await amz.callAPI({ 
-      operation: 'getOrders', endpoint: 'orders', 
-      query: { MarketplaceIds: [marketplaceId], CreatedAfter: createdAfter.toISOString() } 
-    });
+    const resp = await amz.callAPI({ operation: 'getOrders', endpoint: 'orders', query: { MarketplaceIds: [marketplaceId], CreatedAfter: createdAfter.toISOString() } });
     const orders = resp.payload?.Orders || resp.Orders || [];
     const rows = orders.map((o: any) => toOrderRow(o, marketplaceId));
     await upsertOrders(rows);
     return rows.length;
-  } catch (e) { console.error('[Sync] Erro ao sincronizar novos pedidos:', e); }
+  } catch (e) { console.error('[Sync] Erro:', e); }
 }
 
-/**
- * BUSCA ITENS DA AMAZON (Utilizado pela Rota de Reparo)
- */
 export async function fetchOrderItems(orderIds: string[]) {
   const amz = getAmazonClient();
   if (!amz) return {};
   const results: Record<string, any[]> = {};
-
   for (const id of orderIds) {
     try {
       const resp = await amz.callAPI({ operation: 'getOrderItems', endpoint: 'orders', path: { orderId: id } });
       const items = resp.payload?.OrderItems || resp.OrderItems || [];
       results[id] = Array.isArray(items) ? items : (items.OrderItem ? (Array.isArray(items.OrderItem) ? items.OrderItem : [items.OrderItem]) : [items]);
-      // Delay de cortesia para a API
       await new Promise(r => setTimeout(r, 500));
     } catch (e) { results[id] = []; }
   }
@@ -206,7 +197,6 @@ export async function syncPendingOrders(marketplaceId: string) {
   if (pending.length === 0) return;
   const amz = getAmazonClient();
   if (!amz) return;
-
   for (const p of pending) {
     try {
       const resp = await amz.callAPI({ operation: 'getOrder', endpoint: 'orders', path: { orderId: p.amazon_order_id } });
@@ -217,7 +207,7 @@ export async function syncPendingOrders(marketplaceId: string) {
   }
 }
 
-export async function getAlerts() { return []; }
-export async function getPricing() { return []; }
+export async function getAlerts(): Promise<Alert[]> { return []; }
+export async function getPricing(): Promise<PricingRow[]> { return []; }
 export async function checkAndTriggerNewOrdersSync(m: string) {}
 export async function checkAndTriggerStatusSync(m: string) {}
