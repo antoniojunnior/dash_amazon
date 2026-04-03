@@ -138,7 +138,11 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       checkAndTriggerNewOrdersSync(marketplaceId);
       // Gatilho de sincronização bi-diária para atualizar status (cooldown 12h)
       checkAndTriggerStatusSync(marketplaceId);
+    } else {
+      console.warn('[Dashboard] Amazon Client não pode ser inicializado para marketplaceId:', marketplaceId);
     }
+  } else {
+    console.warn('[Dashboard] AMAZON_MARKETPLACE_ID está ausente no ambiente.');
   }
   
   // Normalização para início do dia atual (00:00)
@@ -185,9 +189,15 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       startDate.setDate(todayStart.getDate() - 30);
   }
 
+  const diagnostics = {
+    supabase: !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+    amazon: !!(process.env.AMAZON_CLIENT_ID && process.env.AMAZON_CLIENT_SECRET && process.env.AMAZON_REFRESH_TOKEN),
+    marketplace: !!process.env.AMAZON_MARKETPLACE_ID,
+  };
+
   try {
     const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-    if (!marketplaceId) return { chartData: [], rangeLabel: 'Erro' };
+    if (!marketplaceId) return { chartData: [], rangeLabel: 'Erro', diagnostics };
 
     const orders = await queryOrdersFromDB(marketplaceId, startDate, endDate);
     const inventory = await getInventory();
@@ -282,11 +292,18 @@ export async function getDashboardSummary(range: string = '30d', from?: string, 
       skus_em_risco:    inventory.filter(i => i.status === 'at_risk' || i.status === 'out_of_stock').length,
       capital_necessario: inventory.reduce((acc, i) => acc + i.restock_cost, 0),
       chartData,
-      rangeLabel:       label,
+      rangeLabel: label,
+      diagnostics
     };
   } catch (error) {
-    console.error('Erro no DashboardSummary:', error);
-    return { chartData: [], rangeLabel: 'Erro' };
+    console.error('[Dashboard] Erro crítico em getDashboardSummary:', error);
+    return { 
+      chartData: [], 
+      rangeLabel: 'Erro de Processamento', 
+      diagnostics: { 
+        supabase: false, amazon: false, marketplace: false, error: String(error) 
+      } 
+    };
   }
 }
 

@@ -13,8 +13,11 @@ function getServiceClient() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url || !key) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('[Supabase] Credenciais ausentes. O repositório operará em modo degradado.');
+    if (process.env.NODE_ENV === 'development' || true) { // Permitir log em producao para diagnóstico
+       const missing = [];
+       if (!url) missing.push('NEXT_PUBLIC_SUPABASE_URL');
+       if (!key) missing.push('SUPABASE_SERVICE_ROLE_KEY');
+       console.error(`[Supabase] Erro Crítico: Credenciais ausentes (${missing.join(', ')}). O sistema operará com dados simulados/zerados.`);
     }
     // Retorna um cliente "dummy" seguro que não quebra as chamadas encadeadas
     const dummyClient = {

@@ -35,19 +35,36 @@ export default async function DashboardPage({ searchParams }: Props) {
   return (
     <div className="flex flex-col flex-1 min-w-0">
 
-      {/* Header com Range Selector — Racionalizado MD3 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4 px-1">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-headline-sm font-bold text-on-surface">Visão Operacional</h1>
-          <p className="text-body-sm text-on-surface-variant flex items-center gap-2">
-            <span className="material-symbols-outlined text-[16px]">calendar_today</span>
-            Análise de performance: {data.rangeLabel}
-          </p>
+      {/* Diagnostic Banner — Visible if config is missing */}
+      {(!data.diagnostics?.supabase || !data.diagnostics?.amazon || !data.diagnostics?.marketplace) && (
+        <div className="mb-8 p-6 bg-error-container/20 border-2 border-dashed border-error/30 rounded-2xl flex flex-col sm:flex-row items-center gap-6 group hover:bg-error-container/30 transition-all duration-300">
+          <div className="w-14 h-14 rounded-full bg-error-container flex items-center justify-center shrink-0 shadow-sm animate-pulse">
+            <span className="material-symbols-outlined text-on-error-container text-3xl icon-filled">settings_suggest</span>
+          </div>
+          <div className="flex-1 text-center sm:text-left">
+            <h3 className="text-title-md font-black text-on-surface uppercase tracking-tight">Configuração Pendente (Cloudflare)</h3>
+            <p className="text-body-sm text-on-surface-variant/70 mt-1 max-w-[600px]">
+              O dashboard está operando em <strong>modo de simulação</strong> (zeros) porque algumas credenciais não foram localizadas no ambiente Cloudflare: 
+              <span className="inline-flex gap-2 ml-2">
+                {!data.diagnostics?.supabase && <span className="badge-error text-[9px] font-black uppercase tracking-widest">Supabase</span>}
+                {!data.diagnostics?.amazon && <span className="badge-error text-[9px] font-black uppercase tracking-widest">Amazon API</span>}
+                {!data.diagnostics?.marketplace && <span className="badge-error text-[9px] font-black uppercase tracking-widest">Marketplace ID</span>}
+              </span>
+            </p>
+            <div className="mt-4 flex items-center gap-4 justify-center sm:justify-start">
+               <a 
+                 href="https://dash.cloudflare.com" 
+                 target="_blank" 
+                 className="btn-error !rounded-xl !py-2 !px-4 text-[10px] font-black uppercase tracking-widest gap-2 shadow-sm"
+               >
+                 Abrir Painel Cloudflare
+                 <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+               </a>
+               <p className="text-[10px] font-bold text-on-surface-variant/40 italic">Verifique Settings {'>'} Variables no seu worker.</p>
+            </div>
+          </div>
         </div>
-        <div className="bg-surface-container-low p-1 rounded-xl shadow-sm border border-outline-variant/10">
-          <RangeSelector currentRange={range} from={from} to={to} />
-        </div>
-      </div>
+      )}
 
       <div className="space-y-8 w-full pb-10">
 
