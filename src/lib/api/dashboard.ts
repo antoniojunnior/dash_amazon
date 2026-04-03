@@ -53,41 +53,51 @@ export async function fetchLivePrices(asins: string[]): Promise<Map<string, { pr
 }
 
 /**
- * Helper unificado para extração PROFUNDA de itens de um pedido.
- * Suporta formatos aninhados (OrderItems.OrderItem) e objetos simples.
+ * Helper unificado para extração PROFUNDA de itens de um pedido com PLACEHOLDER UNIVERSAL.
  */
 export function extractNormalizedItems(o: any, raw: any, inventory: InventoryRow[] = []): OrderItem[] {
-  // 1. Tenta encontrar a lista de itens em todos os formatos possíveis da Amazon
   let rawList: any = null;
   
-  // Ordem de prioridade: itens explícitos > OrderItems > Items > o.items
-  if (raw.items && Array.isArray(raw.items) && raw.items.length > 0) rawList = raw.items;
-  else if (raw.OrderItems) rawList = raw.OrderItems.OrderItem || raw.OrderItems;
-  else if (raw.Items) rawList = raw.Items.Item || raw.Items;
+  // Tenta normalizar as chaves para ignorar diferenças de minúsculas/maiúsculas
+  const keys = Object.keys(raw);
+  const findKey = (term: string) => keys.find(k => k.toLowerCase() === term.toLowerCase());
+
+  // Busca em todas as chaves possíveis
+  const itemsKey = findKey('items');
+  const orderItemsKey = findKey('OrderItems');
+  const orderitemsKey = findKey('orderitems');
+
+  if (itemsKey && Array.isArray(raw[itemsKey]) && raw[itemsKey].length > 0) rawList = raw[itemsKey];
+  else if (orderItemsKey) rawList = raw[orderItemsKey].OrderItem || raw[orderItemsKey];
+  else if (orderitemsKey) rawList = raw[orderitemsKey].OrderItem || raw[orderitemsKey];
   else if (o.items && Array.isArray(o.items) && o.items.length > 0) rawList = o.items;
 
-  // 2. Garante que rawList seja um Array (converte objeto único se necessário)
-  const items = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
+  // Garante que rawList seja um Array
+  let items = Array.isArray(rawList) ? rawList : (rawList ? [rawList] : []);
 
-  // 3. Fallback radical: Se ainda vazio, mas sabemos que há produtos, cria placeholder via metadados
-  if (items.length === 0 && (o.num_items_shipped > 0 || o.num_items_unshipped > 0)) {
+  // PLACEHOLDER UNIVERSAL: Se a lista estiver vazia, GARANTE pelo menos um item para não ficar em branco na tela.
+  if (items.length === 0) {
     return [{
-       sku: 'Sincronizando...', asin: '...', title: 'Recuperando nome do produto...',
-       quantity: o.num_items_shipped || o.num_items_unshipped || 1, price: 0
+       sku:       '...',
+       asin:      '...',
+       title:     'Sincronizando produtos da Amazon...',
+       quantity:  Math.max(o.num_items_shipped || 0, o.num_items_unshipped || 1, 1),
+       price:     0
     }];
   }
 
-  // 4. Normalização e Reconstrução de Nomes via Inventário
+  // Normalização e Reconstrução de Nomes
   return items.map((i: any) => {
     const asinVal = i.asin || i.ASIN || '...';
     const skuVal  = i.sku  || i.SellerSKU || '...';
     
-    // Título: SEMPRE tenta o inventário primeiro se o título do payload for genérico ou vazio
+    // Título: Prioridade catálogo local
     const metaCandidate = inventory.find(inv => inv.asin === asinVal || inv.sku === skuVal);
     let titleVal = i.title || i.Title || '';
     
+    // Se o título for vazio ou genérico, tenta o inventário ou o ASIN
     if (!titleVal || titleVal.includes('Pedido ') || titleVal.includes('Sincronizando')) {
-       titleVal = metaCandidate?.title || titleVal || `Item ${asinVal}`;
+       titleVal = metaCandidate?.title || titleVal || `Item: ${asinVal !== '...' ? asinVal : 'Processando...'}`;
     }
 
     return {
@@ -142,7 +152,6 @@ export async function getDashboardSummary(range: string = '30d') {
       vendas_hoje: totalSales, pedidos_hoje: orderStats.length, unidades_vendidas: totalUnits,
       ticket_medio: totalUnits > 0 ? totalSales / totalUnits : 0,
       estoque_valorizado: inventory.reduce((a, b) => a + (b.available * b.unit_cost), 0),
-      skus_ativos: inventory.filter(i => i.available > 0).length,
       chartData: [], rangeLabel: label, diagnostics: { supabase: true, amazon: true, marketplace: true }
     };
   } catch (e) { return { chartData: [], rangeLabel: 'Erro' }; }
